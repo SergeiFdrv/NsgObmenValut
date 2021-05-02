@@ -46,13 +46,18 @@ namespace ОбменникВалют.Метаданные.Обменник
             base.OnCreateReport(nsgBackgroundReporter, e);
 
             string uri;
-            bool hasDate = Период.Value.Year >= 2000;
-            if (hasDate)
+            bool requsetHasDate = Период.Value.Year >= 2000;
+            if (requsetHasDate)
             {
                 uri = $"{Валюта.Value.Код}/{Период.Value.Year}/{Период.Value.Month.ToString("00")}/{Период.Value.Day.ToString("00")}.tsv";
             }
             else
             {
+                if (MessageBox.Show("Загрузка курсов за все время может быть долгой. Продолжить?", "Предупреждение",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                {
+                    return;
+                }
                 uri = $"cb/{Валюта.Value.Код}.tsv";
             }
             HttpWebRequest webRequest = HttpWebRequest.Create(Path.Combine(@"http://cbrates.rbc.ru/tsv", uri)) as HttpWebRequest;
@@ -80,32 +85,26 @@ namespace ОбменникВалют.Метаданные.Обменник
             var obj = Валюты.Новый();
             if (obj.Find(nsgCompare))
             {
-                if (!hasDate)
+                if (!requsetHasDate)
                 {
-                    var old = ИсторияКурсов.Новый();
-                    old.FindAll(nsgCompare);
-                    foreach (var i in old.FindAll(nsgCompare))
+                    var old = ИсторияКурсов.Новый().FindAll(nsgCompare);
+                    for (int i = 0; i < old.Length; i++)
                     {
-                        i.Delete();
+                        old[i].Delete();
                     }
-                    ИсторияКурсов item;
                     string[] a;
-                    /*
-                    foreach (var i in res)
+                    ;
+                    ИсторияКурсов item = ИсторияКурсов.Новый();
+                    for (int i = 0; i < res.Length; i++)
                     {
-                        item = ИсторияКурсов.Новый();
+                        ReportProgress(i * 100 / res.Length, "Загрузка");
+                        a = res[i].Split('\t');
                         item.New();
-                        a = i.Split('\t');
                         item.Валюты = obj;
-                        item.ДатаВремя = Convert.ToDateTime(
-                            a[0].Substring(0, 4) + '/' +
-                            a[0].Substring(4, 2) + '/' +
-                            a[0].Substring(6, 2)
-                            );
+                        item.ДатаВремя = DateTime.ParseExact(a[0], "yyyymmdd", CultureInfo.InvariantCulture);
                         item.Значение = Convert.ToDecimal(a[a.Length - 1], CultureInfo.InvariantCulture);
                         item.Post();
-                    }*/
-                    // долго
+                    }
                 }
                 obj.Edit();
                 var last = res[res.Length - 1].Split('\t');
