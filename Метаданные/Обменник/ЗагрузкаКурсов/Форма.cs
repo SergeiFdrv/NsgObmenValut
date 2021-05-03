@@ -45,6 +45,7 @@ namespace ОбменникВалют.Метаданные.Обменник
         {
             base.OnCreateReport(nsgBackgroundReporter, e);
 
+            // Формируем строку запроса
             string uri;
             bool requsetHasDate = Период.Value.Year >= 2000;
             if (requsetHasDate)
@@ -60,6 +61,8 @@ namespace ОбменникВалют.Метаданные.Обменник
                 }
                 uri = $"cb/{Валюта.Value.Код}.tsv";
             }
+
+            // Делаем запрос
             HttpWebRequest webRequest = HttpWebRequest.Create(Path.Combine(@"http://cbrates.rbc.ru/tsv", uri)) as HttpWebRequest;
             WebResponse response;
             try
@@ -69,49 +72,60 @@ namespace ОбменникВалют.Метаданные.Обменник
             catch (WebException x)
             {
                 Console.WriteLine(x.Message);
+                MessageBox.Show(x.Message + "\n\nStack trace:\n" + x.StackTrace, "Ошибка", MessageBoxButtons.OK);
                 return;
             }
-            var stream = response.GetResponseStream();
+
+            // Считываем ответ
             string[] res;
-            using (var reader = new StreamReader(stream))
+            using (var reader = new StreamReader(response.GetResponseStream()))
             {
                 res = reader.ReadToEnd().Split('\n');
             }
             //MessageBox.Show(uri + '\n' + res[res.Length - 1]);
             //Console.WriteLine(res[res.Length - 1]);
 
+            // БД
+            ИсторияКурсов history = ИсторияКурсов.Новый();
             NsgCompare nsgCompare = new NsgCompare();
-            nsgCompare.Add(ЗагрузкаКурсов.Names.Валюты, Валюта.Value, NsgSoft.Database.NsgComparison.Equal);
-            var obj = Валюты.Новый();
-            if (obj.Find(nsgCompare))
+            nsgCompare.Add(ИсторияКурсов.Names.Валюты, Валюта.Value, NsgSoft.Database.NsgComparison.Equal);
+            if (requsetHasDate) // если в запросе была дата, учитывать её
             {
-                if (!requsetHasDate)
-                {
-                    var old = ИсторияКурсов.Новый().FindAll(nsgCompare);
-                    for (int i = 0; i < old.Length; i++)
-                    {
-                        old[i].Delete();
-                    }
-                    string[] a;
-                    ;
-                    ИсторияКурсов item = ИсторияКурсов.Новый();
-                    for (int i = 0; i < res.Length; i++)
-                    {
-                        ReportProgress(i * 100 / res.Length, "Загрузка");
-                        a = res[i].Split('\t');
-                        item.New();
-                        item.Валюты = obj;
-                        item.ДатаВремя = DateTime.ParseExact(a[0], "yyyymmdd", CultureInfo.InvariantCulture);
-                        item.Значение = Convert.ToDecimal(a[a.Length - 1], CultureInfo.InvariantCulture);
-                        item.Post();
-                    }
-                }
-                obj.Edit();
-                var last = res[res.Length - 1].Split('\t');
-                obj.ТекущийКурс = Convert.ToDecimal(last[last.Length - 1], CultureInfo.InvariantCulture);
-                obj.Post();
-                obj.Cancel();
+                nsgCompare.Add(ИсторияКурсов.Names.ДатаВремя, Период.Value.Date, NsgSoft.Database.NsgComparison.GreaterOrEqual);
+                nsgCompare.Add(ИсторияКурсов.Names.ДатаВремя, Период.Value.AddDays(1).Date, NsgSoft.Database.NsgComparison.Less);
             }
+            history.DeleteArray(nsgCompare);
+            string[] resItem; // хранение текущей записи
+            if (res.Length > 1) // если вернулось больше одной записи, каждая строка res имеет вид "[время] 1 [курс]"
+            { // вносим всё в БД
+                for (int i = 0; i < res.Length; i++)
+                {
+                    ReportProgress(i * 100 / res.Length, "Ждём-с!");
+                    resItem = res[i].Split('\t');
+                    history.New();
+                    history.Валюты = Валюта.Value;
+                    history.ДатаВремя = DateTime.ParseExact(resItem[0], "yyyyMMdd", CultureInfo.InvariantCulture);
+                    history.Значение = Convert.ToDecimal(resItem[2], CultureInfo.InvariantCulture);
+                    history.Post();
+                }
+            }
+            else if (res.Length == 1) // единственная строка res имеет вид "1 [курс]"
+            { // вносим её в БД
+                resItem = res[0].Split('\t');
+                history.New();
+                history.Валюты = Валюта.Value;
+                history.ДатаВремя = Период.Value.Date;
+                history.Значение = Convert.ToDecimal(resItem[1], CultureInfo.InvariantCulture);
+                history.Post();
+            }
+            nsgCompare.RemoveParameters(ИсторияКурсов.Names.ДатаВремя); // поиск за период нам больше не нужен
+            // Присвоить валюте последний курс
+            var sorting = new NsgSorting(new NsgSortingParam(ИсторияКурсов.Names.ДатаВремя, NsgSoft.Database.NsgSortDirection.Descending));
+            int one = 1;
+            var last = history.FindAll(ref one, 0, sorting, nsgCompare)[0];
+            Валюта.Value.Edit();
+            Валюта.Value.ТекущийКурс = last.Значение;
+            Валюта.Value.Post();
         }
 
         protected override void OnCreateReportCompleted(NsgBackgroundWorker nsgBackgroundReporter, System.ComponentModel.RunWorkerCompletedEventArgs e)
